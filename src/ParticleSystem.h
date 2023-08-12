@@ -9,9 +9,20 @@ class Particle
 public:
     glm::vec3 position;
     glm::vec3 velocity;
-    // 其他粒子属性...
+    glm::vec3 prePosition;
+    glm::vec3 preVelpcity;
+    glm::vec3 A;
+    glm::vec3 F;
+    glm::vec3 color;
+    float Density;
+    float pressure;
+    float mass;
+    float volume;
+    float viscosity;
 
-    Particle(const glm::vec3 &pos, const glm::vec3 &vel) : position(pos), velocity(vel) {}
+    Particle(const glm::vec3 &pos, const glm::vec3 &vel) : position(pos), velocity(vel)
+    {
+    }
 };
 
 class ParticleSystem
