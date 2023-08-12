@@ -10,16 +10,18 @@ project(SPH_Fluid_Simulation)
 set(GLFW_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/third/opengl/glfw)
 set(GLFW_LIB ${CMAKE_SOURCE_DIR}/lib/glfw/libglfw3.a)
 set(GLAD_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/third/opengl/GLAD)
+set(GLM_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/third/opengl/glm)
 
 #添加依赖的头文件
 include_directories(
     ${GLFW_INCLUDE_DIR}
     ${GLAD_INCLUDE_DIR}
+    ${GLM_INCLUDE_DIR}
 )
 
 #收集文件
 file(GLOB SOURCES ${CMAKE_SOURCE_DIR}/src/*.cpp)
-file(GLOB HEADERS ${CMAKE_SOURCE_DIR}/include/*.h)
+file(GLOB HEADERS ${CMAKE_SOURCE_DIR}/src/*.h)
 
 #生成可执行程序
 add_executable(${PROJECT_NAME}
