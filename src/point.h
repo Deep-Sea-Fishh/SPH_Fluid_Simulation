@@ -22,7 +22,7 @@ struct Point
     glm::vec3 sum_grad_w;
     float sum_grad_w_dot;
     float kernel_self;
-
+    bool type;
     int next; // 指向下一个点的索引
 };
 

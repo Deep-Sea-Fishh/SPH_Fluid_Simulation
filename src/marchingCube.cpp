@@ -1,5 +1,6 @@
 #include "marchingCube.h"
 #include <iostream>
+#include <thread>
 const unsigned int edgeTable[256] = {
     0x0, 0x109, 0x203, 0x30a, 0x406, 0x50f, 0x605, 0x70c,
     0x80c, 0x905, 0xa0f, 0xb06, 0xc0a, 0xd03, 0xe09, 0xf00,
@@ -593,6 +594,7 @@ unsigned int rxMCMesh::GetEdgeID(unsigned int nX, unsigned int nY, unsigned int 
  */
 unsigned int rxMCMesh::GetVertexID(unsigned int nX, unsigned int nY, unsigned int nZ)
 {
+
     return 3 * (nZ * (m_Grid.iNum[1] + 1) * (m_Grid.iNum[0] + 1) + nY * (m_Grid.iNum[0] + 1) + nX);
 }
 

@@ -21,9 +21,9 @@ void GridContainer::init(const fBox3 &box, float sim_scale, float cell_size, flo
     float world_cellsize = cell_size / sim_scale;
 
     m_GridMin = box.min;
-    // m_GridMin -= border;
+    m_GridMin -= border;
     m_GridMax = box.max;
-    // m_GridMax += border;
+    m_GridMax += border;
     m_GridSize = m_GridMax;
     m_GridSize -= m_GridMin;
 

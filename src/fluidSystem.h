@@ -1,9 +1,11 @@
 #ifndef FLUID_SYSTEM_H
 #define FLUID_SYSTEM_H
+#define SUF
 #include <glm/glm.hpp>
 #include "box.h"
 #include "neighborList.h"
 #include "marchingCube.h"
+#include <mutex>
 class FluidSystem
 {
 public:
@@ -65,16 +67,16 @@ private:
     // 计算密度，压力以及相邻关系
     void _computerPressure();
     // 计算加速度
-    void _computerForce();
-    // 移动粒子
-    void _advance();
+    void _computerForce(int l, int r);
     // 创建初始液体块
     void _addFluidVolume(const fBox3 &fluidBox, float spacing);
 
     glm::vec3 _boundaryForce(Point *p);
     void _collisionHandling(glm::vec3 &pos, glm::vec3 &vel);
-    void _computePredictedDensityAndPressure(int i);
-    void _computeCorrectivePressureForce(int i);
+    void _computePredictedDensityAndPressure(int L, int R);
+    void _updatePosAndVel(int L, int R);
+    void _computeCorrectivePressureForce(int L, int R);
+    void _computePosVel(int L, int R);
     void updatePosAndVel();
     void buildNeighborList();
     float _computeNeighbor(int i);
@@ -82,6 +84,7 @@ private:
     void predictionCorrectionStep();
     // 数据成员
     PointBuffer m_pointBuffer;
+    PointBuffer m_wallBuffer;
     GridContainer m_gridContainer;
     NeighborTable m_neighborTable;
 
@@ -99,6 +102,7 @@ private:
     float m_viscosity;         // 粘性
     float m_restDensity;       // 静态密度
     float m_pointMass;         // 质量
+    float m_wallMass;          // 质量
     float m_smoothRadius;      // 光滑核半径
     float m_gasConstantK;      // 气体常量k
     float m_boundaryStiffness; // 边界刚性
@@ -107,7 +111,7 @@ private:
     glm::vec3 m_gravityDir;    // 重力矢量
     float minLoops = 3;
     float maxLoops = 30;
-    float timeStep = 0.0005f;
+    float timeStep = 0.001f;
     float m_densityErrorFactor;
     bool density_error_too_large;
     float max_predicted_density;
@@ -128,5 +132,8 @@ private:
     vector<unsigned int> m_tri_idx;
 
     float m_thre; // 隐函数阈值
+
+    int threadCnt;
+    std::mutex mtx;
 };
 #endif

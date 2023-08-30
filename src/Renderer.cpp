@@ -2,7 +2,7 @@
 #include <GLFW/glfw3.h>
 
 // camera
-Camera camera(glm::vec3(0.5f, 0.5f, 3.0f));
+Camera camera(glm::vec3(0.7f, 0.7f, 3.0f));
 float lastX = SCR_WIDTH / 2.0f;
 float lastY = SCR_HEIGHT / 2.0f;
 bool firstMouse = true;
@@ -128,7 +128,7 @@ void Renderer::setBuffer(void *buffer, int size, int type, void *idxBuf, int idx
     else if (type == 2)
     {
         posSize = size / 6;
-        triSize = idxSz / 3;
+        triSize = idxSz / sizeof(unsigned int) / 3;
         glBindVertexArray(gridVAO);
         glBindBuffer(GL_ARRAY_BUFFER, gridVBO);
         glBufferData(GL_ARRAY_BUFFER, size, buffer, GL_STATIC_DRAW);
@@ -222,16 +222,18 @@ void Renderer::render()
     glBindVertexArray(particleVAO);
     glDrawArrays(GL_POINTS, 0, pointSize);
     glBindVertexArray(0);
+#ifdef SUF
     // 绘制表面
     sufShader->use();
     sufShader->setMat4("projection", projection);
 
     // camera/view transformation
     sufShader->setMat4("view", view);
+    sufShader->setVec3("viewPos", camera.Position);
     glBindVertexArray(gridVAO);
     glDrawElements(GL_TRIANGLES, triSize * 3, GL_UNSIGNED_INT, 0);
     glBindVertexArray(0);
-
+#endif
     glfwSwapBuffers(window);
     glfwPollEvents();
 }

@@ -2,7 +2,6 @@
 #include "fluidSystem.h"
 #include "Renderer.h"
 #include "setting.h"
-
 const char *vertexShader = "../shader/point.vs";
 const char *fragmentShader = "../shader/point.fs";
 const char *sufVertexShader = "../shader/suf.vs";
@@ -57,17 +56,18 @@ int main()
     };
     while (!glfwWindowShouldClose(renderer->getWindow()))
     {
-
-        fluidSystem.tick();
+        for (int i = 0; i < 50; i++)
+            fluidSystem.tick();
         auto posData = fluidSystem.getPosData();
         renderer->setBuffer((void *)posData.data(), sizeof(float) * posData.size(), 0);
         renderer->setBuffer((void *)box, sizeof(float) * 24, 1);
+#ifdef SUF
         auto verts = fluidSystem.getSufPosNorBuf();
         int verts_sz = fluidSystem.getSufVrtBufNum();
         unsigned int *idxBuf = fluidSystem.getSufTriIdxBuf();
         int idx_sz = fluidSystem.getPolyNum();
-        std::cout << verts_sz << " " << idx_sz << std::endl;
-        renderer->setBuffer((void *)verts, sizeof(float) * verts_sz * 6, 2, idxBuf, idx_sz);
+        renderer->setBuffer((void *)verts, sizeof(float) * verts_sz * 6, 2, (void *)idxBuf, idx_sz * sizeof(unsigned int));
+#endif
         renderer->render();
     }
     return 0;
