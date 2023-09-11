@@ -134,6 +134,32 @@ private:
     float m_thre; // 隐函数阈值
 
     int threadCnt;
-    std::mutex mtx;
+
+    void CalAnisotropicKernel(); // 各项异性核计算
+
+    // 设置各项异性开关
+    void setAnisotropic1() { isAnisotropic = 1; }
+    void setAnisotropic0() { isAnisotropic = 0; }
+
+    // 奇异值分解
+    void RxSVDecomp3(float w[3], float u[9], float v[9], float eps);
+    // 奇异值分解中的相关计算
+    template <class T>
+    inline T RX_SIGN2(const T &a, const T &b) { return b >= 0 ? (a >= 0 ? a : -a) : (a >= 0 ? -a : a); }
+    template <class T>
+    inline T RX_MAX(const T &a, const T &b) { return ((a > b) ? a : b); }
+    inline float RxPythag(const float a, const float b)
+    {
+        float absa = abs(a), absb = abs(b);
+        return (absa > absb ? absa * (float)sqrt((double)(1.0 + (absb / absa) * (absb / absa))) : (absb == 0.0 ? 0.0 : absb * (float)sqrt((double)(1.0 + (absa / absb) * (absa / absb)))));
+    }
+
+    vector<float> m_hPosW;
+    vector<float> m_hEigen;   // 协方差矩阵奇异值
+    vector<float> m_hRMatrix; // 协方差矩阵的奇异向量矩阵（旋转矩阵）
+    vector<float> m_hG;       // 最后的变换矩阵
+
+    vector<float> m_hOldPos; // 保存粒子的实际位置
+    bool isAnisotropic;      // 是否应用各项异性
 };
 #endif

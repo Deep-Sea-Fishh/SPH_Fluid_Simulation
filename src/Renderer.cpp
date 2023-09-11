@@ -2,7 +2,7 @@
 #include <GLFW/glfw3.h>
 
 // camera
-Camera camera(glm::vec3(0.7f, 0.7f, 3.0f));
+Camera camera(glm::vec3(0.5f, 0.7f, 3.0f));
 float lastX = SCR_WIDTH / 2.0f;
 float lastY = SCR_HEIGHT / 2.0f;
 bool firstMouse = true;

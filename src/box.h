@@ -42,7 +42,7 @@ private:
     glm::ivec3 m_GridRes;        // 表格规格（n * m * l）
     glm::vec3 m_GridSize;        // 表格c大小
     glm::vec3 m_GridDelta;       // 表格偏移量
-    float m_GridCellSize;        // 一个格子大小（通常为2倍的光滑核半径）
+    float m_GridCellSize;        // 一个格子大小
 };
 
 #endif // BOX_H

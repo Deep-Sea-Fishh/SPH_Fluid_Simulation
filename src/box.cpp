@@ -49,6 +49,8 @@ void GridContainer::init(const fBox3 &box, float sim_scale, float cell_size, flo
     rex[2] = m_GridRes.z * 8;
 
     m_gridData.resize(gridTotal);
+    std::cout << cell_size << " " << world_cellsize << std::endl;
+    std::cout << m_GridMax.x << " " << m_GridMax.y << " " << m_GridMax.z << std::endl;
 }
 
 void GridContainer::insertParticles(PointBuffer *pointBuffer)
@@ -106,32 +108,25 @@ void GridContainer::findCells(const glm::vec3 &p, float radius, int *gridCell)
 
 void GridContainer::findTwoCells(const glm::vec3 &p, float radius, int *gridCell)
 {
-    for (int i = 0; i < 64; i++)
+    for (int i = 0; i < 27 * 27; i++)
         gridCell[i] = -1;
 
-    // 计算当前粒子点光滑核所在网格范围
-    int sph_min_x = ((-radius + p.x - m_GridMin.x) * m_GridDelta.x);
-    int sph_min_y = ((-radius + p.y - m_GridMin.y) * m_GridDelta.y);
-    int sph_min_z = ((-radius + p.z - m_GridMin.z) * m_GridDelta.z);
-    if (sph_min_x < 0)
-        sph_min_x = 0;
-    if (sph_min_y < 0)
-        sph_min_y = 0;
-    if (sph_min_z < 0)
-        sph_min_z = 0;
-
-    int base = (sph_min_z * m_GridRes.y + sph_min_y) * m_GridRes.x + sph_min_x;
-
-    for (int z = 0; z < 4; z++)
+    int idx = getGridCellIndex(p.x, p.y, p.z);
+    int iz = idx % m_GridRes.z;
+    int iy = (idx / m_GridRes.z) % m_GridRes.y;
+    int ix = idx / (m_GridRes.y * m_GridRes.z);
+    int cnt = 0;
+    for (int i = -2; i < 2; i++)
     {
-        for (int y = 0; y < 4; y++)
+        for (int j = -2; j < 3; j++)
         {
-            for (int x = 0; x < 4; x++)
+            for (int k = -2; k < 3; k++)
             {
-                if ((sph_min_x + x >= m_GridRes.x) || (sph_min_y + y >= m_GridRes.y || (sph_min_z + z >= m_GridRes.z)))
-                    gridCell[16 * z + 4 * y + x] = -1;
-                else
-                    gridCell[16 * z + 4 * y + x] = base + (z * m_GridRes.y + y) * m_GridRes.x + x;
+                int x = ix + i, y = iy + j, z = iz + k;
+                if (x < 0 || y < 0 || z < 0 || x >= m_GridRes.x || y >= m_GridRes.y || z >= m_GridRes.z)
+                    continue;
+                int index = x * (m_GridRes.y * m_GridRes.z) + y * m_GridRes.z + z;
+                gridCell[cnt++] = index;
             }
         }
     }

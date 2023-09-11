@@ -4,6 +4,8 @@
 #include <iostream>
 const float eps = 1e-6;
 int tickCnt = 0;
+std::mutex posDataMtx;
+std::mutex mtx;
 FluidSystem::FluidSystem()
 {
     m_unitScale = 1.0f;      // 尺寸单位
@@ -18,11 +20,11 @@ FluidSystem::FluidSystem()
     m_rexSize[1] = 0;
     m_rexSize[2] = 0;
 
-    m_boundaryStiffness = 550.0f;
+    m_boundaryStiffness = 800.0f;
     m_boundaryDampening = 150.0f;
     m_speedLimiting = 0;
 
-    m_thre = 300;
+    m_thre = 100;
 
     // Poly6 Kernel
     m_kernelPoly6 = 315.0f / (64.0f * 3.141592f * pow(m_smoothRadius, 9));
@@ -155,11 +157,12 @@ void FluidSystem::_updatePosAndVel(int L, int R)
         glm::vec3 vnext = pi->velocity + pi->force * invMass * timeStep; // v(t+1) = v(t-1) + a(t) dt
         pi->velocity = vnext;
         pi->pos += vnext * timeStep / m_unitScale; // p(t+1) = p(t) + v(t+1) dt
-        std::lock_guard<std::mutex> lock(mtx);     // 锁定互斥锁
+        posDataMtx.lock();
         // 弹入位置数据
         posData[3 * i] = pi->pos.x;
         posData[3 * i + 1] = pi->pos.y;
         posData[3 * i + 2] = pi->pos.z;
+        posDataMtx.unlock();
     }
 }
 
@@ -474,7 +477,7 @@ void FluidSystem::_init(unsigned int maxPointCounts, const fBox3 &wallBox, const
     // 设定流体块
     _addFluidVolume(initFluidBox, m_pointDistance / m_unitScale);
     m_mcMesh = rxMCMesh();
-    m_gridContainer.init(wallBox, m_unitScale, m_smoothRadius, 1.0, m_rexSize); // 设置网格尺寸(2r)
+    m_gridContainer.init(wallBox, m_unitScale, m_smoothRadius, 0.1f, m_rexSize); // 设置网格尺寸(2r)
 // 初始化标量场
 #ifdef SUF
     m_field = new float[(m_rexSize[0] + 1) * (m_rexSize[1] + 1) * (m_rexSize[2] + 1)]();
@@ -486,6 +489,11 @@ void FluidSystem::_init(unsigned int maxPointCounts, const fBox3 &wallBox, const
     _computeGradWValues();
     // 计算因子
     _computeDensityErrorFactor();
+
+    setAnisotropic0();
+    m_hEigen.resize(3 * m_pointBuffer.size());
+    m_hRMatrix.resize(9 * m_pointBuffer.size());
+    m_hG.resize(9 * m_pointBuffer.size());
 }
 double FluidSystem::GetImplicit(double x, double y, double z)
 {
@@ -535,47 +543,79 @@ double FluidSystem::CalColorField(double x, double y, double z)
 {
     // MRK:CalColorField
     float c = 0.0;
+    if (x < m_sphWallBox.min.x)
+        return c;
+    if (x > m_sphWallBox.max.x)
+        return c;
+    if (y < m_sphWallBox.min.y)
+        return c;
+    if (y > m_sphWallBox.max.y)
+        return c;
+    if (z < m_sphWallBox.min.z)
+        return c;
+    if (z > m_sphWallBox.max.z)
+        return c;
     glm::vec3 pos(x, y, z);
-
-    if (pos[0] < m_sphWallBox.min[0] - eps)
-        return c;
-    if (pos[0] > m_sphWallBox.max[0] + eps)
-        return c;
-    if (pos[1] < m_sphWallBox.min[1] - eps)
-        return c;
-    if (pos[1] > m_sphWallBox.max[1] + eps)
-        return c;
-    if (pos[2] < m_sphWallBox.min[2] - eps)
-        return c;
-    if (pos[2] > m_sphWallBox.max[2] + eps)
-        return c;
-
     float h = m_smoothRadius;
 
     int cell[27];
     m_gridContainer.findCells(pos, h / m_unitScale, cell);
 
-    // 近傍粒子(各向同性)
-    for (int i = 0; i < 27; i++)
+    if (!isAnisotropic)
     {
-        if (cell[i] < 0)
-            continue;
-        int pndx = m_gridContainer.getGridData(cell[i]);
-        while (pndx != -1)
+        // 近傍粒子(各向同性)
+        for (int i = 0; i < 27; i++)
         {
-            Point *p = m_pointBuffer.get(pndx);
-            float r = glm::distance(pos, p->pos) * m_unitScale;
-            float q = h * h - r * r;
-            if (q > 0)
+            if (cell[i] < 0)
+                continue;
+            int pndx = m_gridContainer.getGridData(cell[i]);
+            while (pndx != -1)
             {
-                c += m_pointMass * m_kernelPoly6 * q * q * q;
+                Point *p = m_pointBuffer.get(pndx);
+                float r = glm::distance(pos, p->pos) * m_unitScale;
+                float q = h * h - r * r;
+                if (q > 0)
+                {
+                    c += m_pointMass * m_kernelPoly6 * q * q * q;
+                }
+                pndx = p->next;
             }
-            pndx = p->next;
+        }
+    }
+    else
+    {
+        // 近傍粒子(各向异性)
+        for (int i = 0; i < 27; i++)
+        {
+            if (cell[i] < 0)
+                continue;
+            int pndx = m_gridContainer.getGridData(cell[i]);
+            while (pndx != -1)
+            {
+                glm::mat3 G(0.0);
+                for (int j = 0; j < 3; ++j)
+                {
+                    for (int k = 0; k < 3; ++k)
+                    {
+                        G[k][j] = m_hG[pndx * 9 + 3 * j + k];
+                    }
+                }
+                Point *p = m_pointBuffer.get(pndx);
+                glm::vec3 rij = pos - p->pos;
+                rij = G * rij; // 形变后的椭球体距离
+                float r = glm::length(rij) * m_unitScale;
+                float q = h * h - r * r;
+                if (q > 0)
+                {
+                    float detG = glm::determinant(G); // 计算行列式
+                    c += detG * m_pointMass * m_kernelPoly6 * q * q * q;
+                }
+                pndx = p->next;
+            }
         }
     }
     return c;
 }
-
 // 获取三角片面缓存
 float *FluidSystem::getPolygonBuf()
 {
@@ -769,16 +809,563 @@ void FluidSystem::tick()
     // 更新粒子数据
     updatePosAndVel();
     // std::cout << 3 << " " << posData.size() << std::endl;
+
 #ifdef SUF
     tickCnt++;
     if (tickCnt % 50 == 0)
     {
-        glm::vec3 tem = m_sphWallBox.min;
+        if (isAnisotropic)
+            CalAnisotropicKernel();
+        glm::vec3 tem = m_sphWallBox.min - glm::vec3(0.1);
 
         CalImplicitFieldDevice(m_rexSize, tem, glm::vec3(0.125 / m_gridContainer.getDelta()), m_field);
         clearSuf(); // 清空表面数据
         m_mcMesh.CreateMeshV(m_field, tem, 0.125 / m_gridContainer.getDelta(), m_rexSize, m_thre, m_vrts, m_nrms, m_face);
+        if (isAnisotropic)
+        {
+            // 返回最初点位置
+            for (int i = 0; i < m_hOldPos.size() / 3; ++i)
+            {
+                Point *p = m_pointBuffer.get(i);
+                p->pos = glm::vec3(m_hOldPos[3 * i], m_hOldPos[3 * i + 1], m_hOldPos[3 * i + 2]);
+            }
+        }
+    }
+#endif
+}
+void FluidSystem::RxSVDecomp3(float w[3], float u[9], float v[9], float eps)
+{
+
+    bool flag;
+    int i, its, j, jj, k, l, nm;
+    float anorm, c, f, g, h, s, scale, x, y, z;
+    float rv1[3];
+    g = scale = anorm = 0.0;
+    for (i = 0; i < 3; ++i)
+    {
+        l = i + 2;
+        rv1[i] = scale * g;
+        g = s = scale = 0.0;
+        for (k = i; k < 3; ++k)
+            scale += abs(u[k * 3 + i]);
+        if (scale != 0.0)
+        {
+            for (k = i; k < 3; ++k)
+            {
+                u[k * 3 + i] /= scale;
+                s += u[k * 3 + i] * u[k * 3 + i];
+            }
+            f = u[i * 3 + i];
+            g = -RX_SIGN2(sqrt(s), f);
+            h = f * g - s;
+            u[i * 3 + i] = f - g;
+            for (j = l - 1; j < 3; ++j)
+            {
+                for (s = 0.0, k = i; k < 3; ++k)
+                    s += u[k * 3 + i] * u[k * 3 + j];
+                f = s / h;
+                for (k = i; k < 3; ++k)
+                    u[k * 3 + j] += f * u[k * 3 + i];
+            }
+            for (k = i; k < 3; ++k)
+                u[k * 3 + i] *= scale;
+        }
+
+        w[i] = scale * g;
+        g = s = scale = 0.0;
+        if (i + 1 <= 3 && i + 1 != 3)
+        {
+            for (k = l - 1; k < 3; ++k)
+                scale += abs(u[i * 3 + k]);
+            if (scale != 0.0)
+            {
+                for (k = l - 1; k < 3; ++k)
+                {
+                    u[i * 3 + k] /= scale;
+                    s += u[i * 3 + k] * u[i * 3 + k];
+                }
+                f = u[i * 3 + l - 1];
+                g = -RX_SIGN2(sqrt(s), f);
+                h = f * g - s;
+                u[i * 3 + l - 1] = f - g;
+                for (k = l - 1; k < 3; ++k)
+                    rv1[k] = u[i * 3 + k] / h;
+                for (j = l - 1; j < 3; ++j)
+                {
+                    for (s = 0.0, k = l - 1; k < 3; ++k)
+                        s += u[j * 3 + k] * u[i * 3 + k];
+                    for (k = l - 1; k < 3; ++k)
+                        u[j * 3 + k] += s * rv1[k];
+                }
+                for (k = l - 1; k < 3; ++k)
+                    u[i * 3 + k] *= scale;
+            }
+        }
+        anorm = RX_MAX(anorm, (abs(w[i]) + abs(rv1[i])));
     }
 
-#endif
+    for (i = 2; i >= 0; --i)
+    {
+        if (i < 2)
+        {
+            if (g != 0.0)
+            {
+                for (j = l; j < 3; ++j)
+                {
+                    v[j * 3 + i] = (u[i * 3 + j] / u[i * 3 + l]) / g;
+                }
+                for (j = l; j < 3; ++j)
+                {
+                    for (s = 0.0, k = l; k < 3; ++k)
+                        s += u[i * 3 + k] * v[k * 3 + j];
+                    for (k = l; k < 3; ++k)
+                        v[k * 3 + j] += s * v[k * 3 + i];
+                }
+            }
+            for (j = l; j < 3; ++j)
+                v[i * 3 + j] = v[j * 3 + i] = 0.0;
+        }
+        v[i * 3 + i] = 1.0;
+        g = rv1[i];
+        l = i;
+    }
+    for (i = 2; i >= 0; --i)
+    {
+        l = i + 1;
+        g = w[i];
+        for (j = l; j < 3; ++j)
+            u[i * 3 + j] = 0.0;
+        if (g != 0.0)
+        {
+            g = 1.0 / g;
+            for (j = l; j < 3; ++j)
+            {
+                for (s = 0.0, k = l; k < 3; ++k)
+                    s += u[k * 3 + i] * u[k * 3 + j];
+                f = (s / u[i * 3 + i]) * g;
+                for (k = i; k < 3; ++k)
+                    u[k * 3 + j] += f * u[k * 3 + i];
+            }
+            for (j = i; j < 3; ++j)
+                u[j * 3 + i] *= g;
+        }
+        else
+        {
+            for (j = i; j < 3; ++j)
+                u[j * 3 + i] = 0.0;
+        }
+        ++u[i * 3 + i];
+    }
+    for (k = 2; k >= 0; --k)
+    {
+        for (its = 0; its < 60; ++its)
+        {
+            flag = true;
+            for (l = k; l >= 0; --l)
+            {
+                nm = l - 1;
+                if (l == 0 || abs(rv1[l]) <= eps * anorm)
+                {
+                    flag = false;
+                    break;
+                }
+                if (abs(w[nm]) <= eps * anorm)
+                    break;
+            }
+            if (flag)
+            {
+                c = 0.0;
+                s = 1.0;
+                for (i = l; i < k + 1; ++i)
+                {
+                    f = s * rv1[i];
+                    rv1[i] = c * rv1[i];
+                    if (abs(f) <= eps * anorm)
+                        break;
+                    g = w[i];
+                    h = RxPythag(f, g);
+                    w[i] = h;
+                    h = 1.0 / h;
+                    c = g * h;
+                    s = -f * h;
+                    for (j = 0; j < 3; ++j)
+                    {
+                        y = u[j * 3 + nm];
+                        z = u[j * 3 + i];
+                        u[j * 3 + nm] = y * c + z * s;
+                        u[j * 3 + i] = z * c - y * s;
+                    }
+                }
+            }
+            z = w[k];
+            if (l == k)
+            {
+                if (z < 0.0)
+                {
+                    w[k] = -z;
+                    for (j = 0; j < 3; ++j)
+                        v[j * 3 + k] = -v[j * 3 + k];
+                }
+                break;
+            }
+            if (its == 59)
+            {
+                printf("no convergence in 60 svdcmp iterations");
+                return;
+            }
+            x = w[l];
+            nm = k - 1;
+            y = w[nm];
+            g = rv1[nm];
+            h = rv1[k];
+            f = ((y - z) * (y + z) + (g - h) * (g + h)) / (2.0 * h * y);
+            g = RxPythag(f, 1.0f);
+            f = ((x - z) * (x + z) + h * ((y / (f + RX_SIGN2(g, f))) - h)) / x;
+            c = s = 1.0;
+            for (j = l; j <= nm; ++j)
+            {
+                i = j + 1;
+                g = rv1[i];
+                y = w[i];
+                h = s * g;
+                g = c * g;
+                z = RxPythag(f, h);
+                rv1[j] = z;
+                c = f / z;
+                s = h / z;
+                f = x * c + g * s;
+                g = g * c - x * s;
+                h = y * s;
+                y *= c;
+                for (jj = 0; jj < 3; ++jj)
+                {
+                    x = v[jj * 3 + j];
+                    z = v[jj * 3 + i];
+                    v[jj * 3 + j] = x * c + z * s;
+                    v[jj * 3 + i] = z * c - x * s;
+                }
+                z = RxPythag(f, h);
+                w[j] = z;
+                if (z)
+                {
+                    z = 1.0 / z;
+                    c = f * z;
+                    s = h * z;
+                }
+                f = c * g + s * y;
+                x = c * y - s * g;
+                for (jj = 0; jj < 3; ++jj)
+                {
+                    y = u[jj * 3 + j];
+                    z = u[jj * 3 + i];
+                    u[jj * 3 + j] = y * c + z * s;
+                    u[jj * 3 + i] = z * c - y * s;
+                }
+            }
+            rv1[l] = 0.0;
+            rv1[k] = f;
+            w[k] = x;
+        }
+    }
+    // reorder
+    int inc = 1;
+    float sw;
+    float su[3], sv[3];
+
+    do
+    {
+        inc *= 3;
+        inc++;
+    } while (inc <= 3);
+
+    do
+    {
+        inc /= 3;
+        for (i = inc; i < 3; ++i)
+        {
+            sw = w[i];
+            for (k = 0; k < 3; ++k)
+                su[k] = u[k * 3 + i];
+            for (k = 0; k < 3; ++k)
+                sv[k] = v[k * 3 + i];
+            j = i;
+            while (w[j - inc] < sw)
+            {
+                w[j] = w[j - inc];
+                for (k = 0; k < 3; ++k)
+                    u[k * 3 + j] = u[k * 3 + j - inc];
+                for (k = 0; k < 3; ++k)
+                    v[k * 3 + j] = v[k * 3 + j - inc];
+                j -= inc;
+                if (j < inc)
+                    break;
+            }
+            w[j] = sw;
+            for (k = 0; k < 3; ++k)
+                u[k * 3 + j] = su[k];
+            for (k = 0; k < 3; ++k)
+                v[k * 3 + j] = sv[k];
+        }
+    } while (inc > 1);
+    for (k = 0; k < 3; ++k)
+    {
+        s = 0;
+        for (i = 0; i < 3; ++i)
+            if (u[i * 3 + k] < 0.)
+                s++;
+        for (j = 0; j < 3; ++j)
+            if (v[j * 3 + k] < 0.)
+                s++;
+        if (s > 3)
+        {
+            for (i = 0; i < 3; ++i)
+                u[i * 3 + k] = -u[i * 3 + k];
+            for (j = 0; j < 3; ++j)
+                v[j * 3 + k] = -v[j * 3 + k];
+        }
+    }
+}
+void FluidSystem::CalAnisotropicKernel()
+{
+    if (m_pointBuffer.size() == 0)
+        return;
+
+    float h0 = m_smoothRadius;
+    float h = 2.0 * h0;
+
+    float lambda = 0.9;
+
+    // 计算更新位置
+    m_hPosW.resize(m_pointBuffer.size() * 3, 0.0);
+    for (unsigned int i = 0; i < m_pointBuffer.size(); ++i)
+    {
+        glm::vec3 pos0;
+        pos0[0] = m_pointBuffer.get(i)->pos.x;
+        pos0[1] = m_pointBuffer.get(i)->pos.y;
+        pos0[2] = m_pointBuffer.get(i)->pos.z;
+
+        // 相邻的粒子
+        glm::vec3 posw(0.0);
+        float sumw = 0.0f;
+
+        int cell[27 * 27]; // 2*smoothRadius的领域网格
+        m_gridContainer.findTwoCells(pos0, h / m_unitScale, cell);
+        // 计算x_mean
+        for (int j = 0; j < 27 * 27; j++)
+        {
+            if (cell[j] == -1)
+                continue;
+            int pndx = m_gridContainer.getGridData(cell[j]);
+            while (pndx != -1)
+            {
+                glm::vec3 pos1;
+                pos1[0] = m_pointBuffer.get(pndx)->pos.x;
+                pos1[1] = m_pointBuffer.get(pndx)->pos.y;
+                pos1[2] = m_pointBuffer.get(pndx)->pos.z;
+
+                float r = glm::length(pos1 - pos0) * m_unitScale;
+
+                if (r < h)
+                {
+                    float q = 1 - r / h;
+                    float wij = q * q * q;
+                    posw += pos1 * wij;
+                    sumw += wij;
+                }
+                pndx = m_pointBuffer.get(pndx)->next;
+            }
+        }
+
+        int DIM = 3;
+        m_hPosW[DIM * i + 0] = posw[0] / sumw;
+        m_hPosW[DIM * i + 1] = posw[1] / sumw;
+        m_hPosW[DIM * i + 2] = posw[2] / sumw;
+
+        // m_hPosW[DIM * i + 0] = (1 - lambda) * m_pointBuffer.get(i)->pos.x + lambda * m_hPosW[DIM * i + 0];
+        // m_hPosW[DIM * i + 1] = (1 - lambda) * m_pointBuffer.get(i)->pos.y + lambda * m_hPosW[DIM * i + 1];
+        // m_hPosW[DIM * i + 2] = (1 - lambda) * m_pointBuffer.get(i)->pos.z + lambda * m_hPosW[DIM * i + 2];
+    }
+
+    m_hOldPos.resize(3 * m_pointBuffer.size(), 0.0);
+    for (int i = 0; i < m_pointBuffer.size(); ++i)
+    {
+        m_hOldPos[3 * i + 0] = m_pointBuffer.get(i)->pos.x;
+        m_hOldPos[3 * i + 1] = m_pointBuffer.get(i)->pos.y;
+        m_hOldPos[3 * i + 2] = m_pointBuffer.get(i)->pos.z;
+    }
+
+    for (int i = 0; i < m_hPosW.size() / 3; ++i)
+    {
+        Point *p = m_pointBuffer.get(i);
+        p->pos = glm::vec3(m_hPosW[3 * i], m_hPosW[3 * i + 1], m_hPosW[3 * i + 2]);
+    }
+    m_gridContainer.insertParticles(&m_pointBuffer);
+    // 协方差矩阵 计算
+    for (unsigned int i = 0; i < m_pointBuffer.size(); ++i)
+    {
+        glm::vec3 xi;
+        xi[0] = m_hPosW[3 * i + 0];
+        xi[1] = m_hPosW[3 * i + 1];
+        xi[2] = m_hPosW[3 * i + 2];
+
+        glm::vec3 xiw(0.0);
+        float sumw = 0.0f;
+        int cell[27 * 27]; // 2*smoothRadius的领域网格
+        m_gridContainer.findTwoCells(xi, h / m_unitScale, cell);
+
+        for (int j = 0; j < 27 * 27; j++)
+        {
+            if (cell[j] == -1)
+                continue;
+            int pndx = m_gridContainer.getGridData(cell[j]);
+
+            while (pndx != -1)
+            {
+                glm::vec3 xj;
+                xj[0] = m_hPosW[3 * pndx + 0];
+                xj[1] = m_hPosW[3 * pndx + 1];
+                xj[2] = m_hPosW[3 * pndx + 2];
+
+                float r = glm::length(xi - xj) * m_unitScale;
+
+                if (r < h)
+                {
+                    float q = 1 - r / h;
+                    float wij = q * q * q;
+                    xiw += xj * wij;
+                    sumw += wij;
+                }
+                pndx = m_pointBuffer.get(pndx)->next;
+            }
+        }
+
+        xiw /= sumw;
+
+        glm::mat3 c(0.0);
+
+        int n = 0;
+        sumw = 0.0f;
+
+        for (int j = 0; j < 27 * 27; j++)
+        {
+            if (cell[j] == -1)
+                continue;
+            int pndx = m_gridContainer.getGridData(cell[j]);
+
+            while (pndx != -1)
+            {
+                glm::vec3 xj;
+                xj[0] = m_hPosW[3 * pndx + 0];
+                xj[1] = m_hPosW[3 * pndx + 1];
+                xj[2] = m_hPosW[3 * pndx + 2];
+
+                float r = glm::length(xi - xj) * m_unitScale;
+
+                if (r < h)
+                {
+                    float q = 1 - r / h;
+                    float wij = q * q * q;
+                    glm::vec3 dxj = xj - xiw;
+
+                    for (int k = 0; k < 3; ++k)
+                    {
+                        c[0][k] += wij * dxj[k] * dxj[0];
+                        c[1][k] += wij * dxj[k] * dxj[1];
+                        c[2][k] += wij * dxj[k] * dxj[2];
+                    }
+                    n++;
+                    sumw += wij;
+                }
+                pndx = m_pointBuffer.get(pndx)->next;
+            }
+        }
+
+        c /= sumw;
+
+        // 奇异值分解
+        float w[3], u[9], v[9];
+        for (int k = 0; k < 3; ++k)
+        {
+            u[k * 3 + 0] = c[0][k];
+            u[k * 3 + 1] = c[1][k];
+            u[k * 3 + 2] = c[2][k];
+        }
+
+        RxSVDecomp3(w, u, v, 1.0e-10);
+
+        // 特征值Σ
+        glm::vec3 sigma;
+        for (int j = 0; j < 3; ++j)
+        {
+            sigma[j] = w[j];
+        }
+
+        // 特征向量（旋转矩阵R）
+        glm::mat3 R;
+        for (int j = 0; j < 3; ++j)
+        {
+            for (int k = 0; k < 3; ++k)
+            {
+                R[j][k] = u[k * 3 + j];
+            }
+        }
+        // 保存的值用于调试
+        // for (int j = 0; j < 3; ++j)
+        // {
+        //     m_hEigen[3 * i + j] = sigma[j];
+        // }
+
+        for (int j = 0; j < 3; ++j)
+        {
+            for (int k = 0; k < 3; ++k)
+            {
+                m_hRMatrix[9 * i + 3 * j + k] = R[k][j];
+            }
+        }
+
+        int ne = 25; // m_params.KernelParticles*0.8;
+        float ks = 1400;
+        float kn = 0.5;
+        float kr = 4.0;
+        if (n > ne)
+        {
+            for (int j = 1; j < 3; ++j)
+            {
+                sigma[j] = RX_MAX(sigma[j], sigma[0] / kr);
+            }
+            sigma *= ks;
+        }
+        else
+        {
+            for (int j = 0; j < 3; ++j)
+            {
+                sigma[j] = kn * 1.0;
+            }
+        }
+        // 核变形矩阵G
+        glm::mat3 G(0.0);
+        glm::mat3 Sigma(1.0 / sigma.x, 0, 0, 0, 1.0 / sigma.y, 0, 0, 0, 1.0 / sigma.z);
+        G = R * Sigma * glm::transpose(R);
+
+        double max_diag = -1.0e10;
+        for (int j = 0; j < 3; ++j)
+        {
+            for (int k = 0; k < 3; ++k)
+            {
+                if (G[k][j] > max_diag)
+                    max_diag = G[k][j];
+            }
+        }
+
+        G /= max_diag;
+
+        // G=glm::inverse(G);
+        for (int j = 0; j < 3; ++j)
+        {
+            for (int k = 0; k < 3; ++k)
+            {
+                m_hG[9 * i + 3 * j + k] = G[k][j];
+            }
+        }
+    }
 }
